@@ -150,9 +150,9 @@ void OpenArmRobotClient::RegisterMcpTools() {
     auto& mcp = McpServer::GetInstance();
     mcp.AddTool(
         "self.robot.perform",
-        "Move your own physical body with one known preset or basic action. Call this silently "
-        "before the "
-        "spoken response so motion begins with speech. Never say that you are checking actions, "
+        "Move your own physical body with one known preset or basic action. Dispatch this silently "
+        "before composing the spoken response so transport and body startup overlap TTS generation. "
+        "Never say that you are checking actions, "
         "calling a tool, controlling a robot, or about to execute a command. Do not repeat the "
         "user's request. Common embodied names such as wave, nod, shake_head, twist_waist, and "
         "raise_arm are resolved locally to a published preset or basic action. A queued result "
@@ -179,8 +179,9 @@ void OpenArmRobotClient::RegisterMcpTools() {
         [this](const PropertyList&) -> ReturnValue { return CachedBasicCatalog(); });
     mcp.AddTool(
         "self.robot.perform_sequence",
-        "Move your own physical body with a sequential action chain. Call this silently before "
-        "the spoken response; never repeat the request or mention planning, tools, commands, "
+        "Move your own physical body with a sequential action chain. Dispatch this silently before "
+        "composing the spoken response so body startup overlaps TTS generation; never repeat the "
+        "request or mention planning, tools, commands, "
         "action libraries, or controlling a robot. sequence_json must be a JSON object such as "
         "{\"name\":\"greeting\",\"actions\":[{\"action\":\"nod\",\"amplitude\":0.4,"
         "\"duration_ms\":1800},{\"action\":\"shake_head\",\"amplitude\":0.3,"
@@ -215,8 +216,7 @@ void OpenArmRobotClient::StartCatalogSync() {
     xTaskCreate(CatalogTask, "openarm_catalog", 7168, this, 1, nullptr);
 }
 
-bool OpenArmRobotClient::Perform(const std::string& action_id, bool autonomous,
-                                 bool sync_to_speech) {
+bool OpenArmRobotClient::Perform(const std::string& action_id, bool autonomous) {
     if (action_id.empty() || action_id.size() >= sizeof(Command{}.action_id)) {
         return false;
     }
@@ -230,8 +230,8 @@ bool OpenArmRobotClient::Perform(const std::string& action_id, bool autonomous,
     if (autonomous) {
         autonomous_active_.store(true);
     }
-    const bool queued = Enqueue(CommandType::kPerform, action_id.c_str(), autonomous,
-                                interrupt_autonomous, "", sync_to_speech);
+    const bool queued =
+        Enqueue(CommandType::kPerform, action_id.c_str(), autonomous, interrupt_autonomous);
     if (autonomous && !queued) {
         autonomous_active_.store(false);
     }
@@ -255,7 +255,7 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
         if (is_basic && !fast_preset.empty() && CatalogContains(published_catalog_, fast_preset)) {
             ESP_LOGI(TAG, "resolved embodied action %s -> cached preset %s", action.c_str(),
                      fast_preset.c_str());
-            return Perform(fast_preset, false, true);
+            return Perform(fast_preset);
         }
     }
 
@@ -270,12 +270,12 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
         cJSON_free(encoded);
         cJSON_Delete(root);
         ESP_LOGI(TAG, "resolved embodied action %s -> basic %s", action.c_str(), resolved.c_str());
-        return !sequence.empty() && PerformSequence(sequence, true);
+        return !sequence.empty() && PerformSequence(sequence);
     }
     if (is_published) {
         ESP_LOGI(TAG, "resolved embodied action %s -> published %s", action.c_str(),
                  resolved.c_str());
-        return Perform(resolved, false, true);
+        return Perform(resolved);
     }
 
     ESP_LOGW(TAG, "rejecting unknown embodied action: %s (resolved=%s)", action.c_str(),
@@ -284,7 +284,7 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
     return false;
 }
 
-bool OpenArmRobotClient::PerformSequence(const std::string& sequence_json, bool sync_to_speech) {
+bool OpenArmRobotClient::PerformSequence(const std::string& sequence_json) {
     if (sequence_json.empty() || sequence_json.size() >= sizeof(Command{}.payload)) {
         SaveResult(false, "basic action sequence JSON is empty or too large");
         return false;
@@ -319,8 +319,7 @@ bool OpenArmRobotClient::PerformSequence(const std::string& sequence_json, bool 
     }
 
     autonomous_active_.store(false);
-    return Enqueue(CommandType::kPerformSequence, "", false, false, sequence_json.c_str(),
-                   sync_to_speech);
+    return Enqueue(CommandType::kPerformSequence, "", false, false, sequence_json.c_str());
 }
 
 bool OpenArmRobotClient::Stop() {
@@ -350,8 +349,7 @@ void OpenArmRobotClient::ClearPendingCommands() {
 }
 
 bool OpenArmRobotClient::Enqueue(CommandType type, const char* action_id, bool autonomous,
-                                 bool interrupt_autonomous, const char* payload,
-                                 bool sync_to_speech) {
+                                 bool interrupt_autonomous, const char* payload) {
     if (queue_ == nullptr) {
         return false;
     }
@@ -359,7 +357,6 @@ bool OpenArmRobotClient::Enqueue(CommandType type, const char* action_id, bool a
         .type = type,
         .autonomous = autonomous,
         .interrupt_autonomous = interrupt_autonomous,
-        .sync_to_speech = sync_to_speech,
         .action_id = {},
         .payload = {},
     };
@@ -392,9 +389,6 @@ void OpenArmRobotClient::WorkerLoop() {
     Command command;
     while (xQueueReceive(queue_, &command, portMAX_DELAY) == pdTRUE) {
         bool ok = false;
-        if (command.sync_to_speech) {
-            WaitForSpeechStart();
-        }
         if (command.type == CommandType::kPerform) {
             if (command.interrupt_autonomous) {
                 CallTool("cancel_motion", "{}");
@@ -424,25 +418,6 @@ void OpenArmRobotClient::WorkerLoop() {
         ESP_LOGI(TAG, "command type=%d result=%s", static_cast<int>(command.type),
                  ok ? "ok" : "failed");
     }
-}
-
-void OpenArmRobotClient::WaitForSpeechStart() {
-    constexpr TickType_t kPollInterval = pdMS_TO_TICKS(20);
-    constexpr TickType_t kMaximumWait = pdMS_TO_TICKS(2500);
-    const TickType_t started_at = xTaskGetTickCount();
-
-    while (xTaskGetTickCount() - started_at < kMaximumWait) {
-        const DeviceState state = Application::GetInstance().GetDeviceState();
-        if (state == kDeviceStateSpeaking) {
-            ESP_LOGI(TAG, "speech started; dispatching embodied motion");
-            return;
-        }
-        if (state != kDeviceStateListening && state != kDeviceStateConnecting) {
-            break;
-        }
-        vTaskDelay(kPollInterval);
-    }
-    ESP_LOGI(TAG, "speech sync timeout or no speech expected; dispatching motion");
 }
 
 void OpenArmRobotClient::CatalogTask(void* context) {

@@ -49,10 +49,11 @@ and optional action-specific parameters such as `side`, `direction`, or
 `repetitions`. Robot Core compiles and MoveIt-validates the complete chain
 before execution.
 
-User-requested `perform` and `perform_sequence` calls are synchronized to the
-next TTS start event. The device waits up to 2.5 seconds before falling back to
-immediate dispatch, so a response with no speech cannot lose its motion.
-Wake-up and autonomous idle movements bypass this wait.
+User-requested `perform` and `perform_sequence` calls are dispatched as soon as
+the model invokes the tool, before it composes the spoken response. LAN
+transport, Robot Core processing, and hardware startup therefore overlap TTS
+generation. The device does not wait for the speaking state. Wake-up and
+autonomous idle movements use the same immediate queue.
 
 `self.robot.perform` validates requests against both synchronized catalogs.
 Published IDs run directly; basic-action IDs become a one-item basic sequence.
