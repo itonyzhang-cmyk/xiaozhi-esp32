@@ -14,8 +14,9 @@ public:
 
     void RegisterMcpTools();
     void StartCatalogSync();
-    bool Perform(const std::string& action_id, bool autonomous = false);
-    bool PerformSequence(const std::string& sequence_json);
+    bool Perform(const std::string& action_id, bool autonomous = false,
+                 bool sync_to_speech = false);
+    bool PerformSequence(const std::string& sequence_json, bool sync_to_speech = true);
     bool Stop();
     bool Rest();
     bool InterruptAutonomous();
@@ -33,6 +34,7 @@ private:
         CommandType type;
         bool autonomous;
         bool interrupt_autonomous;
+        bool sync_to_speech;
         char action_id[48];
         char payload[2048];
     };
@@ -44,19 +46,19 @@ private:
     std::string last_result_ = "no robot command sent yet";
     bool last_ok_ = true;
     std::mutex catalog_mutex_;
-    std::string published_catalog_ =
-        "{\"ok\":false,\"status\":\"not_synced\",\"actions\":[]}";
-    std::string basic_catalog_ =
-        "{\"ok\":false,\"status\":\"not_synced\",\"actions\":[]}";
+    std::string published_catalog_ = "{\"ok\":false,\"status\":\"not_synced\",\"actions\":[]}";
+    std::string basic_catalog_ = "{\"ok\":false,\"status\":\"not_synced\",\"actions\":[]}";
 
     static void WorkerTask(void* context);
     static void CatalogTask(void* context);
     void WorkerLoop();
     void CatalogLoop();
     bool SyncCatalogs();
+    void WaitForSpeechStart();
     void ClearPendingCommands();
     bool Enqueue(CommandType type, const char* action_id = "", bool autonomous = false,
-                 bool interrupt_autonomous = false, const char* payload = "");
+                 bool interrupt_autonomous = false, const char* payload = "",
+                 bool sync_to_speech = false);
     bool CallTool(const char* tool_name, const std::string& arguments_json,
                   std::string* response_out = nullptr, bool update_status = true);
     std::string CachedPublishedCatalog();
