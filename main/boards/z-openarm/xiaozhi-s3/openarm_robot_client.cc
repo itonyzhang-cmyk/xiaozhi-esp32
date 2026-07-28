@@ -5,6 +5,7 @@
 #include "mcp_server.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <stdexcept>
 #include <utility>
@@ -30,6 +31,7 @@ std::string QueueAckJson(bool queued, const char* command, const std::string& ac
     cJSON* root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", queued);
     cJSON_AddStringToObject(root, "status", queued ? "queued" : "rejected");
+    cJSON_AddBoolToObject(root, "execution_confirmed", false);
     cJSON_AddBoolToObject(root, "embodied", true);
     cJSON_AddStringToObject(root, "command", command);
     if (!action.empty()) {
@@ -40,6 +42,30 @@ std::string QueueAckJson(bool queued, const char* command, const std::string& ac
     cJSON_free(encoded);
     cJSON_Delete(root);
     return result;
+}
+
+std::string ResolveEmbodiedAlias(const std::string& requested) {
+    static constexpr std::array<std::pair<const char*, const char*>, 13> kAliases = {{
+        {"wave", "high-wave-front"},
+        {"hand_wave", "high-wave-front"},
+        {"挥手", "high-wave-front"},
+        {"nod", "attentive-nod"},
+        {"点头", "attentive-nod"},
+        {"twist_waist", "sway_waist"},
+        {"waist_twist", "sway_waist"},
+        {"扭腰", "sway_waist"},
+        {"raise_hand", "raise_arm"},
+        {"hands_up", "raise_arm"},
+        {"抬手", "raise_arm"},
+        {"抬臂", "raise_arm"},
+        {"shake", "shake_head"},
+    }};
+    for (const auto& [alias, canonical] : kAliases) {
+        if (requested == alias) {
+            return canonical;
+        }
+    }
+    return requested;
 }
 
 std::string ToolResultText(const std::string& response) {
@@ -106,15 +132,18 @@ void OpenArmRobotClient::RegisterMcpTools() {
     auto& mcp = McpServer::GetInstance();
     mcp.AddTool(
         "self.robot.perform",
-        "Move your own physical body with one published preset. Call this silently before the "
+        "Move your own physical body with one known preset or basic action. Call this silently "
+        "before the "
         "spoken response so motion begins with speech. Never say that you are checking actions, "
         "calling a tool, controlling a robot, or about to execute a command. Do not repeat the "
-        "user's request. After a successful call, respond naturally in first person. Use the "
-        "cached catalog only when the action id is genuinely unknown.",
+        "user's request. Common embodied names such as wave, nod, shake_head, twist_waist, and "
+        "raise_arm are resolved locally to a published preset or basic action. A queued result "
+        "only means accepted, not that physical movement has completed; never claim that the user "
+        "must have seen it. After acceptance, respond naturally in first person.",
         PropertyList({Property("action", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
             const auto action = properties["action"].value<std::string>();
-            return QueueAckJson(Perform(action, false, true), "perform", action);
+            return QueueAckJson(PerformEmbodied(action), "perform", action);
         });
     mcp.AddTool(
         "self.robot.list_actions",
@@ -191,6 +220,46 @@ bool OpenArmRobotClient::Perform(const std::string& action_id, bool autonomous,
     return queued;
 }
 
+bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
+    if (action.empty()) {
+        SaveResult(false, "embodied action is empty");
+        return false;
+    }
+
+    const std::string resolved = ResolveEmbodiedAlias(action);
+    bool is_published = false;
+    bool is_basic = false;
+    {
+        std::lock_guard<std::mutex> lock(catalog_mutex_);
+        is_published = CatalogContains(published_catalog_, resolved);
+        is_basic = CatalogContains(basic_catalog_, resolved);
+    }
+
+    if (is_published) {
+        ESP_LOGI(TAG, "resolved embodied action %s -> published %s", action.c_str(),
+                 resolved.c_str());
+        return Perform(resolved, false, true);
+    }
+    if (is_basic) {
+        cJSON* root = cJSON_CreateObject();
+        cJSON* actions = cJSON_AddArrayToObject(root, "actions");
+        cJSON* item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "action", resolved.c_str());
+        cJSON_AddItemToArray(actions, item);
+        char* encoded = cJSON_PrintUnformatted(root);
+        const std::string sequence(encoded == nullptr ? "" : encoded);
+        cJSON_free(encoded);
+        cJSON_Delete(root);
+        ESP_LOGI(TAG, "resolved embodied action %s -> basic %s", action.c_str(), resolved.c_str());
+        return !sequence.empty() && PerformSequence(sequence, true);
+    }
+
+    ESP_LOGW(TAG, "rejecting unknown embodied action: %s (resolved=%s)", action.c_str(),
+             resolved.c_str());
+    SaveResult(false, "unknown embodied action: " + action);
+    return false;
+}
+
 bool OpenArmRobotClient::PerformSequence(const std::string& sequence_json, bool sync_to_speech) {
     if (sequence_json.empty() || sequence_json.size() >= sizeof(Command{}.payload)) {
         SaveResult(false, "basic action sequence JSON is empty or too large");
@@ -198,14 +267,33 @@ bool OpenArmRobotClient::PerformSequence(const std::string& sequence_json, bool 
     }
     cJSON* root = cJSON_Parse(sequence_json.c_str());
     cJSON* actions = root == nullptr ? nullptr : cJSON_GetObjectItem(root, "actions");
-    const bool valid =
-        cJSON_IsObject(root) && cJSON_IsArray(actions) && cJSON_GetArraySize(actions) > 0;
-    cJSON_Delete(root);
+    const bool valid = cJSON_IsObject(root) && cJSON_IsArray(actions) &&
+                       cJSON_GetArraySize(actions) > 0 && cJSON_GetArraySize(actions) <= 12;
     if (!valid) {
-        SaveResult(false,
-                   "basic action sequence must be a JSON object with a non-empty actions array");
+        cJSON_Delete(root);
+        SaveResult(false, "basic action sequence must contain between 1 and 12 actions");
         return false;
     }
+
+    std::string unknown_action;
+    {
+        std::lock_guard<std::mutex> lock(catalog_mutex_);
+        cJSON* item = nullptr;
+        cJSON_ArrayForEach (item, actions) {
+            cJSON* action = cJSON_GetObjectItem(item, "action");
+            if (!cJSON_IsString(action) || !CatalogContains(basic_catalog_, action->valuestring)) {
+                unknown_action = cJSON_IsString(action) ? action->valuestring : "<missing>";
+                break;
+            }
+        }
+    }
+    cJSON_Delete(root);
+    if (!unknown_action.empty()) {
+        ESP_LOGW(TAG, "rejecting sequence with unknown basic action: %s", unknown_action.c_str());
+        SaveResult(false, "unknown basic action in sequence: " + unknown_action);
+        return false;
+    }
+
     autonomous_active_.store(false);
     return Enqueue(CommandType::kPerformSequence, "", false, false, sequence_json.c_str(),
                    sync_to_speech);
@@ -383,6 +471,22 @@ bool OpenArmRobotClient::SyncCatalogs() {
     return true;
 }
 
+bool OpenArmRobotClient::CatalogContains(const std::string& catalog, const std::string& action_id) {
+    cJSON* root = cJSON_Parse(catalog.c_str());
+    cJSON* actions = root == nullptr ? nullptr : cJSON_GetObjectItem(root, "actions");
+    bool found = false;
+    cJSON* item = nullptr;
+    cJSON_ArrayForEach (item, actions) {
+        cJSON* id = cJSON_GetObjectItem(item, "id");
+        if (cJSON_IsString(id) && action_id == id->valuestring) {
+            found = true;
+            break;
+        }
+    }
+    cJSON_Delete(root);
+    return found;
+}
+
 bool OpenArmRobotClient::CallTool(const char* tool_name, const std::string& arguments_json,
                                   std::string* response_out, bool update_status) {
     std::string token = CONFIG_OPENARM_MCP_TOKEN;
@@ -400,7 +504,7 @@ bool OpenArmRobotClient::CallTool(const char* tool_name, const std::string& argu
                        ",\"arguments\":" + arguments_json + "}}";
 
     auto network = Board::GetInstance().GetNetwork();
-    auto http = network->CreateHttp(3);
+    auto http = network->CreateHttp(15);
     http->SetHeader("Authorization", "Bearer " + token);
     http->SetHeader("Content-Type", "application/json");
     http->SetContent(std::move(body));

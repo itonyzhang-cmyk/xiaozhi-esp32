@@ -54,6 +54,13 @@ next TTS start event. The device waits up to 2.5 seconds before falling back to
 immediate dispatch, so a response with no speech cannot lose its motion.
 Wake-up and autonomous idle movements bypass this wait.
 
+`self.robot.perform` validates requests against both synchronized catalogs.
+Published IDs run directly; basic-action IDs become a one-item basic sequence.
+Common names such as `wave`, `nod`, `twist_waist`, and `raise_arm` are resolved
+locally. Unknown names are rejected before queue acknowledgement, and action
+chains reject unknown basic IDs. LAN execution calls use a 15-second background
+timeout so MoveIt validation cannot outlive the device request unnoticed.
+
 ## Xiaozhi role prompt
 
 The cloud role prompt controls whether tool use sounds like an external robot

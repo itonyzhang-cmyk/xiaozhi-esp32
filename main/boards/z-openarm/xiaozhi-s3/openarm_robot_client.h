@@ -14,6 +14,7 @@ public:
 
     void RegisterMcpTools();
     void StartCatalogSync();
+    bool PerformEmbodied(const std::string& action);
     bool Perform(const std::string& action_id, bool autonomous = false,
                  bool sync_to_speech = false);
     bool PerformSequence(const std::string& sequence_json, bool sync_to_speech = true);
@@ -55,6 +56,7 @@ private:
     void CatalogLoop();
     bool SyncCatalogs();
     void WaitForSpeechStart();
+    bool CatalogContains(const std::string& catalog, const std::string& action_id);
     void ClearPendingCommands();
     bool Enqueue(CommandType type, const char* action_id = "", bool autonomous = false,
                  bool interrupt_autonomous = false, const char* payload = "",
