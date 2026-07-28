@@ -25,6 +25,25 @@ std::string JsonString(const std::string& value) {
     return result;
 }
 
+std::string QueueAckJson(bool queued, const char* command, const std::string& action = {}) {
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", queued);
+    cJSON_AddStringToObject(root, "status", queued ? "queued" : "rejected");
+    cJSON_AddStringToObject(root, "command", command);
+    if (!action.empty()) {
+        cJSON_AddStringToObject(root, "action", action.c_str());
+    }
+    cJSON_AddStringToObject(
+        root, "message",
+        queued ? "Command accepted locally; execution continues asynchronously."
+               : "The local command queue rejected the command.");
+    char* encoded = cJSON_PrintUnformatted(root);
+    std::string result(encoded == nullptr ? "{}" : encoded);
+    cJSON_free(encoded);
+    cJSON_Delete(root);
+    return result;
+}
+
 }  // namespace
 
 OpenArmRobotClient::OpenArmRobotClient() {
@@ -44,18 +63,23 @@ void OpenArmRobotClient::RegisterMcpTools() {
         "attentive-nod, curious-tilt, or rest. The command is queued locally and returns immediately.",
         PropertyList({Property("action", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
-            return Perform(properties["action"].value<std::string>());
+            const auto action = properties["action"].value<std::string>();
+            return QueueAckJson(Perform(action), "perform", action);
         });
     mcp.AddTool(
         "self.robot.stop",
         "Stop the current robot motion and hold near the current position.",
         PropertyList(),
-        [this](const PropertyList&) -> ReturnValue { return Stop(); });
+        [this](const PropertyList&) -> ReturnValue {
+            return QueueAckJson(Stop(), "stop");
+        });
     mcp.AddTool(
         "self.robot.rest",
         "Cancel the current robot motion and return the whole robot safely to its rest pose.",
         PropertyList(),
-        [this](const PropertyList&) -> ReturnValue { return Rest(); });
+        [this](const PropertyList&) -> ReturnValue {
+            return QueueAckJson(Rest(), "rest");
+        });
     mcp.AddTool(
         "self.robot.get_status",
         "Get the cached result of the most recent local robot command without blocking the voice task.",
@@ -123,10 +147,19 @@ bool OpenArmRobotClient::Enqueue(CommandType type, const char* action_id, bool a
         .action_id = {},
     };
     std::strncpy(command.action_id, action_id, sizeof(command.action_id) - 1);
+    const std::string command_name =
+        type == CommandType::kPerform ? "perform" : (type == CommandType::kStop ? "stop" : "rest");
+    const std::string queued_result =
+        command.action_id[0] == '\0'
+            ? "queued " + command_name
+            : "queued " + command_name + ": " + std::string(command.action_id);
+    SaveResult(true, queued_result);
     if (xQueueSend(queue_, &command, 0) != pdTRUE) {
         ESP_LOGW(TAG, "command queue full; dropping type=%d", static_cast<int>(type));
+        SaveResult(false, "local command queue is full");
         return false;
     }
+    ESP_LOGI(TAG, "%s", queued_result.c_str());
     return true;
 }
 

@@ -37,8 +37,8 @@ private:
     std::atomic<bool> autonomous_active_{false};
     std::atomic<uint32_t> request_id_{1};
     std::mutex status_mutex_;
-    std::string last_result_ = "not connected";
-    bool last_ok_ = false;
+    std::string last_result_ = "no robot command sent yet";
+    bool last_ok_ = true;
 
     static void WorkerTask(void* context);
     void WorkerLoop();
