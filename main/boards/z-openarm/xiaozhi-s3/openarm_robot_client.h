@@ -13,7 +13,9 @@ public:
     OpenArmRobotClient();
 
     void RegisterMcpTools();
+    void StartCatalogSync();
     bool Perform(const std::string& action_id, bool autonomous = false);
+    bool PerformSequence(const std::string& sequence_json);
     bool Stop();
     bool Rest();
     bool InterruptAutonomous();
@@ -22,6 +24,7 @@ public:
 private:
     enum class CommandType : uint8_t {
         kPerform,
+        kPerformSequence,
         kStop,
         kRest,
     };
@@ -31,6 +34,7 @@ private:
         bool autonomous;
         bool interrupt_autonomous;
         char action_id[48];
+        char payload[2048];
     };
 
     QueueHandle_t queue_ = nullptr;
@@ -39,13 +43,24 @@ private:
     std::mutex status_mutex_;
     std::string last_result_ = "no robot command sent yet";
     bool last_ok_ = true;
+    std::mutex catalog_mutex_;
+    std::string published_catalog_ =
+        "{\"ok\":false,\"status\":\"not_synced\",\"actions\":[]}";
+    std::string basic_catalog_ =
+        "{\"ok\":false,\"status\":\"not_synced\",\"actions\":[]}";
 
     static void WorkerTask(void* context);
+    static void CatalogTask(void* context);
     void WorkerLoop();
+    void CatalogLoop();
+    bool SyncCatalogs();
     void ClearPendingCommands();
     bool Enqueue(CommandType type, const char* action_id = "", bool autonomous = false,
-                 bool interrupt_autonomous = false);
-    bool CallTool(const char* tool_name, const std::string& arguments_json);
+                 bool interrupt_autonomous = false, const char* payload = "");
+    bool CallTool(const char* tool_name, const std::string& arguments_json,
+                  std::string* response_out = nullptr, bool update_status = true);
+    std::string CachedPublishedCatalog();
+    std::string CachedBasicCatalog();
     std::string StatusJson();
     void SaveResult(bool ok, const std::string& result);
 };

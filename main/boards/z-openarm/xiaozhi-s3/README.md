@@ -31,9 +31,23 @@ host service is `openarm-mcp.service`, with its token stored outside Git in
 Device MCP tools:
 
 - `self.robot.perform`
+- `self.robot.list_actions`
+- `self.robot.list_basic_actions`
+- `self.robot.perform_sequence`
 - `self.robot.stop`
 - `self.robot.rest`
 - `self.robot.get_status`
+
+Published presets and parameterized basic-action metadata are not hardcoded in
+the firmware. The device synchronizes compact catalogs from the robot-local MCP
+endpoint after networking and entering idle, caches them in memory, and
+refreshes them every 15 minutes only while idle.
+
+`self.robot.perform_sequence` accepts an ordered JSON action chain. Each item
+selects a basic action and supplies bounded `amplitude`, total `duration_ms`,
+and optional action-specific parameters such as `side`, `direction`, or
+`repetitions`. Robot Core compiles and MoveIt-validates the complete chain
+before execution.
 
 When the device leaves idle to begin a new listening session, it queues the
 published `attentive-nod` action once by default. Configure or disable this with

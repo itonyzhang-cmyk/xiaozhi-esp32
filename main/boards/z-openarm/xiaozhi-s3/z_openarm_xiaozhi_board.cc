@@ -138,6 +138,7 @@ public:
         InitializeDisplay();
         InitializeButtons();
         robot_.RegisterMcpTools();
+        robot_.StartCatalogSync();
         idle_controller_.Start();
     }
 
