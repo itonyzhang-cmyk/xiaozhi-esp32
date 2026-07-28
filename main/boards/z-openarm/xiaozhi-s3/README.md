@@ -57,9 +57,12 @@ Wake-up and autonomous idle movements bypass this wait.
 `self.robot.perform` validates requests against both synchronized catalogs.
 Published IDs run directly; basic-action IDs become a one-item basic sequence.
 Common names such as `wave`, `nod`, `twist_waist`, and `raise_arm` resolve to
-parameterized basic actions. If an ID exists in both catalogs, the basic action
-wins; choreographed presets require an explicit name. For example,
-`high-wave-front` is reserved for a deliberately high, enthusiastic wave.
+their ordinary basic-action meaning. For low response latency, unparameterized
+single-action requests use matching prevalidated lightweight releases when
+available (`casual-wave`, `quick-nod`, `waist-sway`, and the right-arm forward
+raise); parameterized chains still use the basic-action compiler. Choreographed
+presets require an explicit name. For example, `high-wave-front` is reserved for
+a deliberately high, enthusiastic wave.
 Unknown names are rejected before queue acknowledgement, and action chains
 reject unknown basic IDs. LAN execution calls use a 15-second background timeout
 so MoveIt validation cannot outlive the device request unnoticed.

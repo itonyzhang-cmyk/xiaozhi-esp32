@@ -70,6 +70,22 @@ std::string ResolveEmbodiedAlias(const std::string& requested) {
     return requested;
 }
 
+std::string FastPresetForBasicAction(const std::string& action) {
+    static constexpr std::array<std::pair<const char*, const char*>, 5> kFastPresets = {{
+        {"wave", "casual-wave"},
+        {"nod", "quick-nod"},
+        {"sway_waist", "waist-sway"},
+        {"raise_arm", "primitive-right-raise-forward"},
+        {"rotate_forearm", "forearm-twist"},
+    }};
+    for (const auto& [basic, preset] : kFastPresets) {
+        if (action == basic) {
+            return preset;
+        }
+    }
+    return "";
+}
+
 std::string ToolResultText(const std::string& response) {
     cJSON* root = cJSON_Parse(response.c_str());
     cJSON* result = root == nullptr ? nullptr : cJSON_GetObjectItem(root, "result");
@@ -235,10 +251,14 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
         std::lock_guard<std::mutex> lock(catalog_mutex_);
         is_published = CatalogContains(published_catalog_, resolved);
         is_basic = CatalogContains(basic_catalog_, resolved);
+        const std::string fast_preset = FastPresetForBasicAction(resolved);
+        if (is_basic && !fast_preset.empty() && CatalogContains(published_catalog_, fast_preset)) {
+            ESP_LOGI(TAG, "resolved embodied action %s -> cached preset %s", action.c_str(),
+                     fast_preset.c_str());
+            return Perform(fast_preset, false, true);
+        }
     }
 
-    // Generic names shared by both catalogs represent parameterized basics.
-    // Choreographed presets must be requested by their explicit published ID.
     if (is_basic) {
         cJSON* root = cJSON_CreateObject();
         cJSON* actions = cJSON_AddArrayToObject(root, "actions");
