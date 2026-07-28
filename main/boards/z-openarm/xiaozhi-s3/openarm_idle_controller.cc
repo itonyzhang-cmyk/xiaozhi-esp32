@@ -51,6 +51,9 @@ void OpenArmIdleController::Loop() {
     constexpr const char* kIdleActions[] = {
         "idle-look-around",
         "idle-neck-stretch",
+        "idle-look-around",
+        "idle-neck-stretch",
+        "rest",
     };
     uint32_t idle_seconds = 0;
     uint32_t next_motion_at = CONFIG_OPENARM_IDLE_MIN_SECONDS;

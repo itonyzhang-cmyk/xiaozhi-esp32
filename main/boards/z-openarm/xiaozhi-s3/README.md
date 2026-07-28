@@ -41,6 +41,7 @@ published `attentive-nod` action once by default. Configure or disable this with
 transition during an active conversation does not retrigger the action.
 
 Autonomous actions are restricted to the published action IDs
-`idle-look-around`, `idle-neck-stretch`, and `idle-doze`. They are skipped when
-the robot service is busy or unavailable and are interrupted when Xiaozhi
-leaves the idle state.
+`idle-look-around`, `idle-neck-stretch`, `idle-doze`, and `rest`. Normal idle
+movement favors looking around and neck stretching; full-body rest is selected
+at a lower random frequency. They are skipped when the robot service is busy or
+unavailable and are interrupted when Xiaozhi leaves the idle state.

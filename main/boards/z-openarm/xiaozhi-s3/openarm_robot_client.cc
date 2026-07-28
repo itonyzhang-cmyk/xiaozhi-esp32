@@ -39,9 +39,9 @@ void OpenArmRobotClient::RegisterMcpTools() {
     auto& mcp = McpServer::GetInstance();
     mcp.AddTool(
         "self.robot.perform",
-        "Perform a published robot action by id. Prefer known actions such as high-wave-front, welcome-bow, "
-        "please-left, please-right, attentive-nod, curious-tilt, or rest. The command is queued locally and "
-        "returns immediately.",
+        "Perform a published robot action by id. Prefer known actions such as quick-nod, waist-sway, "
+        "casual-wave, forearm-twist, high-wave-front, welcome-bow, please-left, please-right, "
+        "attentive-nod, curious-tilt, or rest. The command is queued locally and returns immediately.",
         PropertyList({Property("action", kPropertyTypeString)}),
         [this](const PropertyList& properties) -> ReturnValue {
             return Perform(properties["action"].value<std::string>());
