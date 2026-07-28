@@ -14,6 +14,10 @@ OpenArmIdleController::OpenArmIdleController(OpenArmRobotClient& robot) : robot_
 }
 
 void OpenArmIdleController::Start() {
+#if CONFIG_OPENARM_WAKE_MOTION || CONFIG_OPENARM_IDLE_MOTION
+    Application::GetInstance().AddDeviceStateChangeListener(
+        [this](DeviceState old_state, DeviceState new_state) { HandleStateChange(old_state, new_state); });
+#endif
 #if CONFIG_OPENARM_IDLE_MOTION
     xTaskCreate(Task, "openarm_idle", 4096, this, 1, nullptr);
 #endif
@@ -21,6 +25,26 @@ void OpenArmIdleController::Start() {
 
 void OpenArmIdleController::Task(void* context) {
     static_cast<OpenArmIdleController*>(context)->Loop();
+}
+
+void OpenArmIdleController::HandleStateChange(DeviceState old_state, DeviceState new_state) {
+#if CONFIG_OPENARM_WAKE_MOTION
+    if (old_state == kDeviceStateIdle && new_state == kDeviceStateConnecting) {
+        if (robot_.Perform(CONFIG_OPENARM_WAKE_ACTION)) {
+            ESP_LOGI(TAG, "queued wake action %s", CONFIG_OPENARM_WAKE_ACTION);
+        } else {
+            ESP_LOGW(TAG, "failed to queue wake action %s", CONFIG_OPENARM_WAKE_ACTION);
+        }
+    }
+#endif
+
+#if CONFIG_OPENARM_IDLE_MOTION
+    if (old_state == kDeviceStateIdle && new_state != kDeviceStateIdle &&
+        robot_.GetAutonomousActive()) {
+        ESP_LOGI(TAG, "interaction interrupted autonomous motion");
+        robot_.InterruptAutonomous();
+    }
+#endif
 }
 
 void OpenArmIdleController::Loop() {
@@ -31,25 +55,18 @@ void OpenArmIdleController::Loop() {
     uint32_t idle_seconds = 0;
     uint32_t next_motion_at = CONFIG_OPENARM_IDLE_MIN_SECONDS;
     bool dozing = false;
-    bool was_idle = false;
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));
         const bool is_idle = Application::GetInstance().GetDeviceState() == kDeviceStateIdle;
 
         if (!is_idle) {
-            if (was_idle && robot_.GetAutonomousActive()) {
-                ESP_LOGI(TAG, "interaction interrupted autonomous motion");
-                robot_.InterruptAutonomous();
-            }
             idle_seconds = 0;
             dozing = false;
-            was_idle = false;
             next_motion_at = CONFIG_OPENARM_IDLE_MIN_SECONDS;
             continue;
         }
 
-        was_idle = true;
         ++idle_seconds;
         if (!dozing && idle_seconds >= CONFIG_OPENARM_DOZE_SECONDS) {
             if (robot_.Perform("idle-doze", true)) {

@@ -11,6 +11,7 @@
 #include <deque>
 #include <memory>
 #include <functional>
+#include <utility>
 
 #include "protocol.h"
 #include "ota.h"
@@ -67,6 +68,10 @@ public:
 
     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
+
+    int AddDeviceStateChangeListener(DeviceStateMachine::StateCallback callback) {
+        return state_machine_.AddStateChangeListener(std::move(callback));
+    }
     
     /**
      * Request state transition

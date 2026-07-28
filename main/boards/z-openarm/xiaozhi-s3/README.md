@@ -35,6 +35,11 @@ Device MCP tools:
 - `self.robot.rest`
 - `self.robot.get_status`
 
+When the device leaves idle to begin a new listening session, it queues the
+published `attentive-nod` action once by default. Configure or disable this with
+`OPENARM_WAKE_ACTION` and `OPENARM_WAKE_MOTION`. The speaking-to-listening
+transition during an active conversation does not retrigger the action.
+
 Autonomous actions are restricted to the published action IDs
 `idle-look-around`, `idle-neck-stretch`, and `idle-doze`. They are skipped when
 the robot service is busy or unavailable and are interrupted when Xiaozhi

@@ -625,6 +625,18 @@ menu "Z-OpenArm Robot"
             Keep the real token in sdkconfig only. Do not add it to config.json
             or source files.
 
+    config OPENARM_WAKE_MOTION
+        bool "Move when entering a voice interaction"
+        default y
+
+    config OPENARM_WAKE_ACTION
+        string "Published wake action id"
+        default "attentive-nod"
+        depends on OPENARM_WAKE_MOTION
+        help
+            Published action queued once when the device leaves idle and starts
+            connecting for a new listening session.
+
     config OPENARM_IDLE_MOTION
         bool "Enable autonomous idle motion"
         default y
