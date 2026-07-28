@@ -589,6 +589,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_YUNLIAO_S3
         bool "Yunliao S3 (小智云聊)"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_Z_OPENARM_XIAOZHI_S3
+        bool "Z-OpenArm Xiaozhi ESP32-S3"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_ZECTRIX_S3_EPAPER_4_2
         bool "Zectrix S3 ePaper 4.2"
         depends on IDF_TARGET_ESP32S3
@@ -605,6 +608,45 @@ choice BOARD_TYPE
         bool "Zhengchen AI Camera Wi-Fi (征辰科技)"
         depends on IDF_TARGET_ESP32S3
 endchoice
+
+menu "Z-OpenArm Robot"
+    depends on BOARD_TYPE_Z_OPENARM_XIAOZHI_S3
+
+    config OPENARM_MCP_URL
+        string "LAN MCP endpoint"
+        default "http://192.168.31.108:8790/mcp"
+        help
+            Authenticated OpenArm MCP HTTP endpoint on the local robot host.
+
+    config OPENARM_MCP_TOKEN
+        string "LAN MCP bearer token"
+        default ""
+        help
+            Keep the real token in sdkconfig only. Do not add it to config.json
+            or source files.
+
+    config OPENARM_IDLE_MOTION
+        bool "Enable autonomous idle motion"
+        default y
+
+    config OPENARM_IDLE_MIN_SECONDS
+        int "Minimum idle interval"
+        range 30 900
+        default 45
+        depends on OPENARM_IDLE_MOTION
+
+    config OPENARM_IDLE_MAX_SECONDS
+        int "Maximum idle interval"
+        range 30 1800
+        default 90
+        depends on OPENARM_IDLE_MOTION
+
+    config OPENARM_DOZE_SECONDS
+        int "Idle time before dozing"
+        range 120 7200
+        default 300
+        depends on OPENARM_IDLE_MOTION
+endmenu
 
 choice XIAOZHI_NETWORK_TYPE
     prompt "Network Type"
@@ -682,7 +724,7 @@ choice ESP32_S3_LCD_EV_BOARD_VERSION
 endchoice
 
 choice DISPLAY_OLED_TYPE
-    depends on BOARD_TYPE_BREAD_COMPACT_WIFI || BOARD_TYPE_BREAD_COMPACT_ML307 || BOARD_TYPE_BREAD_COMPACT_NT26 || BOARD_TYPE_BREAD_COMPACT_ESP32 || BOARD_TYPE_HU_087
+    depends on BOARD_TYPE_BREAD_COMPACT_WIFI || BOARD_TYPE_BREAD_COMPACT_ML307 || BOARD_TYPE_BREAD_COMPACT_NT26 || BOARD_TYPE_BREAD_COMPACT_ESP32 || BOARD_TYPE_HU_087 || BOARD_TYPE_Z_OPENARM_XIAOZHI_S3
     prompt "OLED Type"
     default OLED_SSD1306_128X32
     help
