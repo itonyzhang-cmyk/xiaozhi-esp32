@@ -45,12 +45,10 @@ std::string QueueAckJson(bool queued, const char* command, const std::string& ac
 }
 
 std::string ResolveEmbodiedAlias(const std::string& requested) {
-    static constexpr std::array<std::pair<const char*, const char*>, 13> kAliases = {{
-        {"wave", "high-wave-front"},
-        {"hand_wave", "high-wave-front"},
-        {"挥手", "high-wave-front"},
-        {"nod", "attentive-nod"},
-        {"点头", "attentive-nod"},
+    static constexpr std::array<std::pair<const char*, const char*>, 15> kAliases = {{
+        {"hand_wave", "wave"},
+        {"挥手", "wave"},
+        {"点头", "nod"},
         {"twist_waist", "sway_waist"},
         {"waist_twist", "sway_waist"},
         {"扭腰", "sway_waist"},
@@ -59,6 +57,10 @@ std::string ResolveEmbodiedAlias(const std::string& requested) {
         {"抬手", "raise_arm"},
         {"抬臂", "raise_arm"},
         {"shake", "shake_head"},
+        {"high_wave_front", "high-wave-front"},
+        {"high_wave", "high-wave-front"},
+        {"高举挥手", "high-wave-front"},
+        {"双臂高举挥手", "high-wave-front"},
     }};
     for (const auto& [alias, canonical] : kAliases) {
         if (requested == alias) {
@@ -235,11 +237,8 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
         is_basic = CatalogContains(basic_catalog_, resolved);
     }
 
-    if (is_published) {
-        ESP_LOGI(TAG, "resolved embodied action %s -> published %s", action.c_str(),
-                 resolved.c_str());
-        return Perform(resolved, false, true);
-    }
+    // Generic names shared by both catalogs represent parameterized basics.
+    // Choreographed presets must be requested by their explicit published ID.
     if (is_basic) {
         cJSON* root = cJSON_CreateObject();
         cJSON* actions = cJSON_AddArrayToObject(root, "actions");
@@ -252,6 +251,11 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
         cJSON_Delete(root);
         ESP_LOGI(TAG, "resolved embodied action %s -> basic %s", action.c_str(), resolved.c_str());
         return !sequence.empty() && PerformSequence(sequence, true);
+    }
+    if (is_published) {
+        ESP_LOGI(TAG, "resolved embodied action %s -> published %s", action.c_str(),
+                 resolved.c_str());
+        return Perform(resolved, false, true);
     }
 
     ESP_LOGW(TAG, "rejecting unknown embodied action: %s (resolved=%s)", action.c_str(),
