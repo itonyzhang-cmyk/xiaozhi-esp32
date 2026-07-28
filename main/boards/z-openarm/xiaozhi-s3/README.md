@@ -64,9 +64,13 @@ available (`casual-wave`, `quick-nod`, `waist-sway`, and the right-arm forward
 raise); parameterized chains still use the basic-action compiler. Choreographed
 presets require an explicit name. For example, `high-wave-front` is reserved for
 a deliberately high, enthusiastic wave.
+
+Directed gaze names such as `look_left`, `look_right`, `向左看`, and `向右看`
+become a parameterized `look` request. Unlike `shake_head`, `look` makes one
+larger turn and holds its final target until another head action or rest command.
 Unknown names are rejected before queue acknowledgement, and action chains
-reject unknown basic IDs. LAN execution calls use a 15-second background timeout
-so MoveIt validation cannot outlive the device request unnoticed.
+reject unknown basic IDs. LAN execution calls use a 15-second background
+timeout so MoveIt validation cannot outlive the device request unnoticed.
 
 ## Xiaozhi role prompt
 

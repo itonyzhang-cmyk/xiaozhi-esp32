@@ -70,6 +70,27 @@ std::string ResolveEmbodiedAlias(const std::string& requested) {
     return requested;
 }
 
+std::string ResolveLookDirection(const std::string& requested) {
+    static constexpr std::array<std::pair<const char*, const char*>, 10> kLookDirections = {{
+        {"look_left", "left"},
+        {"turn_head_left", "left"},
+        {"向左看", "left"},
+        {"看左边", "left"},
+        {"左转头", "left"},
+        {"look_right", "right"},
+        {"turn_head_right", "right"},
+        {"向右看", "right"},
+        {"看右边", "right"},
+        {"右转头", "right"},
+    }};
+    for (const auto& [alias, direction] : kLookDirections) {
+        if (requested == alias) {
+            return direction;
+        }
+    }
+    return "";
+}
+
 std::string FastPresetForBasicAction(const std::string& action) {
     static constexpr std::array<std::pair<const char*, const char*>, 5> kFastPresets = {{
         {"wave", "casual-wave"},
@@ -154,8 +175,9 @@ void OpenArmRobotClient::RegisterMcpTools() {
         "before composing the spoken response so transport and body startup overlap TTS generation. "
         "Never say that you are checking actions, "
         "calling a tool, controlling a robot, or about to execute a command. Do not repeat the "
-        "user's request. Common embodied names such as wave, nod, shake_head, twist_waist, and "
-        "raise_arm are resolved locally to a published preset or basic action. A queued result "
+        "user's request. Common embodied names such as wave, nod, shake_head, look_left, "
+        "look_right, twist_waist, and raise_arm are resolved locally to a published preset or "
+        "basic action. A queued result "
         "only means accepted, not that physical movement has completed; never claim that the user "
         "must have seen it. After acceptance, respond naturally in first person.",
         PropertyList({Property("action", kPropertyTypeString)}),
@@ -242,6 +264,30 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
     if (action.empty()) {
         SaveResult(false, "embodied action is empty");
         return false;
+    }
+
+    const std::string look_direction = ResolveLookDirection(action);
+    if (!look_direction.empty()) {
+        {
+            std::lock_guard<std::mutex> lock(catalog_mutex_);
+            if (!CatalogContains(basic_catalog_, "look")) {
+                SaveResult(false, "look basic action is unavailable");
+                return false;
+            }
+        }
+        cJSON* root = cJSON_CreateObject();
+        cJSON* actions = cJSON_AddArrayToObject(root, "actions");
+        cJSON* item = cJSON_CreateObject();
+        cJSON_AddStringToObject(item, "action", "look");
+        cJSON_AddStringToObject(item, "direction", look_direction.c_str());
+        cJSON_AddItemToArray(actions, item);
+        char* encoded = cJSON_PrintUnformatted(root);
+        const std::string sequence(encoded == nullptr ? "" : encoded);
+        cJSON_free(encoded);
+        cJSON_Delete(root);
+        ESP_LOGI(TAG, "resolved embodied action %s -> look %s", action.c_str(),
+                 look_direction.c_str());
+        return !sequence.empty() && PerformSequence(sequence);
     }
 
     const std::string resolved = ResolveEmbodiedAlias(action);
