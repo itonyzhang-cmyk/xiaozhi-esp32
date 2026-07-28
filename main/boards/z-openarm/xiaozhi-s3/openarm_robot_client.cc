@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstring>
 #include <stdexcept>
+#include <utility>
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -163,12 +164,11 @@ bool OpenArmRobotClient::CallTool(const char* tool_name, const std::string& argu
     auto http = network->CreateHttp(3);
     http->SetHeader("Authorization", "Bearer " + token);
     http->SetHeader("Content-Type", "application/json");
+    http->SetContent(std::move(body));
     if (!http->Open("POST", CONFIG_OPENARM_MCP_URL)) {
         SaveResult(false, "failed to open local MCP endpoint");
         return false;
     }
-    http->Write(body.c_str(), body.size());
-    http->Write("", 0);
     const int status_code = http->GetStatusCode();
     std::string response = http->ReadAll();
     http->Close();
@@ -190,6 +190,9 @@ bool OpenArmRobotClient::CallTool(const char* tool_name, const std::string& argu
         response.resize(512);
     }
     SaveResult(ok, "HTTP " + std::to_string(status_code) + ": " + response);
+    if (!ok) {
+        ESP_LOGW(TAG, "tool %s failed with HTTP %d: %s", tool_name, status_code, response.c_str());
+    }
     return ok;
 }
 
