@@ -29,6 +29,7 @@ private:
     struct Command {
         CommandType type;
         bool autonomous;
+        bool interrupt_autonomous;
         char action_id[48];
     };
 
@@ -42,7 +43,8 @@ private:
     static void WorkerTask(void* context);
     void WorkerLoop();
     void ClearPendingCommands();
-    bool Enqueue(CommandType type, const char* action_id = "", bool autonomous = false);
+    bool Enqueue(CommandType type, const char* action_id = "", bool autonomous = false,
+                 bool interrupt_autonomous = false);
     bool CallTool(const char* tool_name, const std::string& arguments_json);
     std::string StatusJson();
     void SaveResult(bool ok, const std::string& result);

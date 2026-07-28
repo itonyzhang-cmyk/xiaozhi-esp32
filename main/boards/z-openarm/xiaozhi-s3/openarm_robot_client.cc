@@ -67,14 +67,18 @@ bool OpenArmRobotClient::Perform(const std::string& action_id, bool autonomous) 
     if (action_id.empty() || action_id.size() >= sizeof(Command{}.action_id)) {
         return false;
     }
-    if (!autonomous && autonomous_active_.exchange(false)) {
+    bool interrupt_autonomous = false;
+    if (!autonomous) {
+        interrupt_autonomous = autonomous_active_.exchange(false);
+    }
+    if (interrupt_autonomous) {
         ClearPendingCommands();
-        Enqueue(CommandType::kRest);
     }
     if (autonomous) {
         autonomous_active_.store(true);
     }
-    const bool queued = Enqueue(CommandType::kPerform, action_id.c_str(), autonomous);
+    const bool queued =
+        Enqueue(CommandType::kPerform, action_id.c_str(), autonomous, interrupt_autonomous);
     if (autonomous && !queued) {
         autonomous_active_.store(false);
     }
@@ -107,13 +111,15 @@ void OpenArmRobotClient::ClearPendingCommands() {
     }
 }
 
-bool OpenArmRobotClient::Enqueue(CommandType type, const char* action_id, bool autonomous) {
+bool OpenArmRobotClient::Enqueue(CommandType type, const char* action_id, bool autonomous,
+                                 bool interrupt_autonomous) {
     if (queue_ == nullptr) {
         return false;
     }
     Command command = {
         .type = type,
         .autonomous = autonomous,
+        .interrupt_autonomous = interrupt_autonomous,
         .action_id = {},
     };
     std::strncpy(command.action_id, action_id, sizeof(command.action_id) - 1);
@@ -133,7 +139,21 @@ void OpenArmRobotClient::WorkerLoop() {
     while (xQueueReceive(queue_, &command, portMAX_DELAY) == pdTRUE) {
         bool ok = false;
         if (command.type == CommandType::kPerform) {
-            ok = CallTool("execute_action", "{\"id\":" + JsonString(command.action_id) + "}");
+            if (command.interrupt_autonomous) {
+                CallTool("cancel_motion", "{}");
+                vTaskDelay(pdMS_TO_TICKS(200));
+            }
+            constexpr int kInterruptSubmitAttempts = 5;
+            const int attempts = command.interrupt_autonomous ? kInterruptSubmitAttempts : 1;
+            for (int attempt = 1; attempt <= attempts; ++attempt) {
+                ok = CallTool("execute_action", "{\"id\":" + JsonString(command.action_id) + "}");
+                if (ok || attempt == attempts) {
+                    break;
+                }
+                ESP_LOGI(TAG, "retrying action %s after autonomous cancel (%d/%d)",
+                         command.action_id, attempt + 1, attempts);
+                vTaskDelay(pdMS_TO_TICKS(250));
+            }
             if (command.autonomous && !ok) {
                 autonomous_active_.store(false);
             }
