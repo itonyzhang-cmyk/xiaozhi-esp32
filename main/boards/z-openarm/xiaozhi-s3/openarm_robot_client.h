@@ -2,15 +2,19 @@
 #define _OPENARM_ROBOT_CLIENT_H_
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
+class Http;
+
 class OpenArmRobotClient {
 public:
     OpenArmRobotClient();
+    ~OpenArmRobotClient();
 
     void RegisterMcpTools();
     void StartCatalogSync();
@@ -45,6 +49,8 @@ private:
     QueueHandle_t queue_ = nullptr;
     std::atomic<bool> autonomous_active_{false};
     std::atomic<uint32_t> request_id_{1};
+    std::mutex http_mutex_;
+    std::unique_ptr<Http> http_;
     std::mutex status_mutex_;
     std::string last_result_ = "no robot command sent yet";
     bool last_ok_ = true;

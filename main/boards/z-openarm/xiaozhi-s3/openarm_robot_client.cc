@@ -2,6 +2,7 @@
 
 #include "application.h"
 #include "board.h"
+#include "http.h"
 #include "mcp_server.h"
 
 #include <algorithm>
@@ -167,6 +168,8 @@ OpenArmRobotClient::OpenArmRobotClient() {
     }
     xTaskCreate(WorkerTask, "openarm_mcp", 6144, this, 2, nullptr);
 }
+
+OpenArmRobotClient::~OpenArmRobotClient() = default;
 
 void OpenArmRobotClient::RegisterMcpTools() {
     auto& mcp = McpServer::GetInstance();
@@ -557,6 +560,8 @@ bool OpenArmRobotClient::CatalogContains(const std::string& catalog, const std::
 
 bool OpenArmRobotClient::CallTool(const char* tool_name, const std::string& arguments_json,
                                   std::string* response_out, bool update_status) {
+    std::lock_guard<std::mutex> http_lock(http_mutex_);
+
     std::string token = CONFIG_OPENARM_MCP_TOKEN;
     if (token.empty()) {
         if (update_status) {
@@ -572,19 +577,24 @@ bool OpenArmRobotClient::CallTool(const char* tool_name, const std::string& argu
                        ",\"arguments\":" + arguments_json + "}}";
 
     auto network = Board::GetInstance().GetNetwork();
-    auto http = network->CreateHttp(15);
-    http->SetHeader("Authorization", "Bearer " + token);
-    http->SetHeader("Content-Type", "application/json");
-    http->SetContent(std::move(body));
-    if (!http->Open("POST", CONFIG_OPENARM_MCP_URL)) {
+    if (http_ == nullptr) {
+        http_ = network->CreateHttp(15);
+    }
+    http_->SetHeader("Authorization", "Bearer " + token);
+    http_->SetHeader("Content-Type", "application/json");
+    http_->SetContent(std::move(body));
+    if (!http_->Open("POST", CONFIG_OPENARM_MCP_URL)) {
         if (update_status) {
             SaveResult(false, "failed to open local MCP endpoint");
         }
         return false;
     }
-    const int status_code = http->GetStatusCode();
-    std::string response = http->ReadAll();
-    http->Close();
+    const int status_code = http_->GetStatusCode();
+    std::string response = http_->ReadAll();
+    http_->Close();
+    // esp-ml307 dispatches the TCP disconnect callback from its receive task.
+    // Keep this client alive and yield until that callback has released it.
+    vTaskDelay(pdMS_TO_TICKS(20));
 
     bool ok = status_code == 200;
     cJSON* root = cJSON_Parse(response.c_str());
