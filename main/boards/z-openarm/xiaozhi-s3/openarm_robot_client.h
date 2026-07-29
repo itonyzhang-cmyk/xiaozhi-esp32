@@ -16,11 +16,14 @@ public:
     void StartCatalogSync();
     bool PerformEmbodied(const std::string& action);
     bool Perform(const std::string& action_id, bool autonomous = false);
+    bool PerformFastIntent(const std::string& action_id, const std::string& semantic_key,
+                           uint32_t lease_ms = 15000);
     bool PerformSequence(const std::string& sequence_json);
     bool Stop();
     bool Rest();
     bool InterruptAutonomous();
     bool GetAutonomousActive() const { return autonomous_active_.load(); }
+    bool HasInteractionLease() const;
 
 private:
     enum class CommandType : uint8_t {
@@ -34,6 +37,7 @@ private:
         CommandType type;
         bool autonomous;
         bool interrupt_autonomous;
+        int64_t enqueued_at_us;
         char action_id[48];
         char payload[2048];
     };
@@ -47,6 +51,10 @@ private:
     std::mutex catalog_mutex_;
     std::string published_catalog_ = "{\"ok\":false,\"status\":\"not_synced\",\"actions\":[]}";
     std::string basic_catalog_ = "{\"ok\":false,\"status\":\"not_synced\",\"actions\":[]}";
+    std::atomic<uint32_t> interaction_lease_until_{0};
+    std::mutex fast_intent_mutex_;
+    std::string last_fast_intent_;
+    uint32_t last_fast_intent_at_ = 0;
 
     static void WorkerTask(void* context);
     static void CatalogTask(void* context);
@@ -54,6 +62,7 @@ private:
     void CatalogLoop();
     bool SyncCatalogs();
     bool CatalogContains(const std::string& catalog, const std::string& action_id);
+    bool IsRecentFastIntent(const std::string& semantic_key);
     void ClearPendingCommands();
     bool Enqueue(CommandType type, const char* action_id = "", bool autonomous = false,
                  bool interrupt_autonomous = false, const char* payload = "");

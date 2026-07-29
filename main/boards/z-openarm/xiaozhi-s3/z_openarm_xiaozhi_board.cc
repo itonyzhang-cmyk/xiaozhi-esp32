@@ -6,6 +6,7 @@
 #include "config.h"
 #include "led/single_led.h"
 #include "openarm_idle_controller.h"
+#include "openarm_fast_intent_router.h"
 #include "openarm_robot_client.h"
 #include "assets/lang_config.h"
 
@@ -32,6 +33,7 @@ private:
     Button volume_up_button_;
     Button volume_down_button_;
     OpenArmRobotClient robot_;
+    OpenArmFastIntentRouter fast_intent_router_;
     OpenArmIdleController idle_controller_;
 
     void InitializeDisplayI2c() {
@@ -133,12 +135,14 @@ public:
           volume_up_button_(VOLUME_UP_BUTTON_GPIO),
           volume_down_button_(VOLUME_DOWN_BUTTON_GPIO),
           robot_(),
+          fast_intent_router_(robot_),
           idle_controller_(robot_) {
         InitializeDisplayI2c();
         InitializeDisplay();
         InitializeButtons();
         robot_.RegisterMcpTools();
         robot_.StartCatalogSync();
+        fast_intent_router_.Start();
         idle_controller_.Start();
     }
 

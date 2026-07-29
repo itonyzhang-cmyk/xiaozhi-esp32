@@ -92,9 +92,10 @@ std::string ResolveLookDirection(const std::string& requested) {
 }
 
 std::string FastPresetForBasicAction(const std::string& action) {
-    static constexpr std::array<std::pair<const char*, const char*>, 5> kFastPresets = {{
+    static constexpr std::array<std::pair<const char*, const char*>, 6> kFastPresets = {{
         {"wave", "casual-wave"},
         {"nod", "quick-nod"},
+        {"shake_head", "quick-shake-head"},
         {"sway_waist", "waist-sway"},
         {"raise_arm", "primitive-right-raise-forward"},
         {"rotate_forearm", "forearm-twist"},
@@ -260,6 +261,32 @@ bool OpenArmRobotClient::Perform(const std::string& action_id, bool autonomous) 
     return queued;
 }
 
+bool OpenArmRobotClient::PerformFastIntent(const std::string& action_id,
+                                           const std::string& semantic_key,
+                                           uint32_t lease_ms) {
+    const uint32_t now = xTaskGetTickCount();
+    {
+        std::lock_guard<std::mutex> lock(fast_intent_mutex_);
+        last_fast_intent_ = semantic_key;
+        last_fast_intent_at_ = now;
+    }
+    interaction_lease_until_.store(now + pdMS_TO_TICKS(lease_ms));
+    return Perform(action_id);
+}
+
+bool OpenArmRobotClient::HasInteractionLease() const {
+    const uint32_t until = interaction_lease_until_.load();
+    const uint32_t now = xTaskGetTickCount();
+    return until != 0 && static_cast<int32_t>(until - now) > 0;
+}
+
+bool OpenArmRobotClient::IsRecentFastIntent(const std::string& semantic_key) {
+    constexpr TickType_t kDuplicateWindow = pdMS_TO_TICKS(8000);
+    std::lock_guard<std::mutex> lock(fast_intent_mutex_);
+    return semantic_key == last_fast_intent_ &&
+           xTaskGetTickCount() - last_fast_intent_at_ <= kDuplicateWindow;
+}
+
 bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
     if (action.empty()) {
         SaveResult(false, "embodied action is empty");
@@ -268,29 +295,22 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
 
     const std::string look_direction = ResolveLookDirection(action);
     if (!look_direction.empty()) {
-        {
-            std::lock_guard<std::mutex> lock(catalog_mutex_);
-            if (!CatalogContains(basic_catalog_, "look")) {
-                SaveResult(false, "look basic action is unavailable");
-                return false;
-            }
+        const std::string semantic_key = "look:" + look_direction;
+        if (IsRecentFastIntent(semantic_key)) {
+            ESP_LOGI(TAG, "suppressed duplicate cloud action %s", semantic_key.c_str());
+            return true;
         }
-        cJSON* root = cJSON_CreateObject();
-        cJSON* actions = cJSON_AddArrayToObject(root, "actions");
-        cJSON* item = cJSON_CreateObject();
-        cJSON_AddStringToObject(item, "action", "look");
-        cJSON_AddStringToObject(item, "direction", look_direction.c_str());
-        cJSON_AddItemToArray(actions, item);
-        char* encoded = cJSON_PrintUnformatted(root);
-        const std::string sequence(encoded == nullptr ? "" : encoded);
-        cJSON_free(encoded);
-        cJSON_Delete(root);
-        ESP_LOGI(TAG, "resolved embodied action %s -> look %s", action.c_str(),
-                 look_direction.c_str());
-        return !sequence.empty() && PerformSequence(sequence);
+        const std::string preset = "quick-look-" + look_direction;
+        ESP_LOGI(TAG, "resolved embodied action %s -> cached preset %s", action.c_str(),
+                 preset.c_str());
+        return Perform(preset);
     }
 
     const std::string resolved = ResolveEmbodiedAlias(action);
+    if ((resolved == "nod" || resolved == "shake_head") && IsRecentFastIntent(resolved)) {
+        ESP_LOGI(TAG, "suppressed duplicate cloud action %s", resolved.c_str());
+        return true;
+    }
     bool is_published = false;
     bool is_basic = false;
     {
@@ -403,6 +423,7 @@ bool OpenArmRobotClient::Enqueue(CommandType type, const char* action_id, bool a
         .type = type,
         .autonomous = autonomous,
         .interrupt_autonomous = interrupt_autonomous,
+        .enqueued_at_us = esp_timer_get_time(),
         .action_id = {},
         .payload = {},
     };
@@ -434,6 +455,8 @@ void OpenArmRobotClient::WorkerTask(void* context) {
 void OpenArmRobotClient::WorkerLoop() {
     Command command;
     while (xQueueReceive(queue_, &command, portMAX_DELAY) == pdTRUE) {
+        ESP_LOGI(TAG, "dispatch queue_wait_ms=%lld",
+                 static_cast<long long>((esp_timer_get_time() - command.enqueued_at_us) / 1000));
         bool ok = false;
         if (command.type == CommandType::kPerform) {
             if (command.interrupt_autonomous) {

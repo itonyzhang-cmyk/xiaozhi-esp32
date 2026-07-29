@@ -70,6 +70,10 @@ void OpenArmIdleController::Loop() {
             continue;
         }
 
+        if (robot_.HasInteractionLease()) {
+            continue;
+        }
+
         ++idle_seconds;
         if (!dozing && idle_seconds >= CONFIG_OPENARM_DOZE_SECONDS) {
             if (robot_.Perform("idle-doze", true)) {

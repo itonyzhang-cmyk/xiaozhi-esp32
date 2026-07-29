@@ -586,17 +586,25 @@ void Application::InitializeProtocol() {
         } else if (strcmp(type->valuestring, "stt") == 0) {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
+                const std::string message(text->valuestring);
                 std::vector<TextGlyph> glyphs;
                 uint8_t bpp = 0;
                 if (!TextGlyphPayload::Parse(root, glyphs, bpp)) {
                     glyphs.clear();
                 }
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([display, message = std::string(text->valuestring),
-                          glyphs = std::move(glyphs), bpp]() {
+                Schedule([display, message, glyphs = std::move(glyphs), bpp]() {
                     display->AddTextGlyphs(glyphs, bpp);
                     display->SetChatMessage("user", message.c_str());
                 });
+                std::vector<std::function<void(const std::string&)>> listeners;
+                {
+                    std::lock_guard<std::mutex> lock(stt_listeners_mutex_);
+                    listeners = stt_listeners_;
+                }
+                for (const auto& listener : listeners) {
+                    listener(message);
+                }
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
             auto emotion = cJSON_GetObjectItem(root, "emotion");
@@ -650,6 +658,11 @@ void Application::InitializeProtocol() {
     });
 
     protocol_->Start();
+}
+
+void Application::AddSttListener(std::function<void(const std::string&)> callback) {
+    std::lock_guard<std::mutex> lock(stt_listeners_mutex_);
+    stt_listeners_.push_back(std::move(callback));
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message) {

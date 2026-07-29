@@ -12,6 +12,7 @@
 #include <memory>
 #include <functional>
 #include <utility>
+#include <vector>
 
 #include "protocol.h"
 #include "ota.h"
@@ -72,6 +73,8 @@ public:
     int AddDeviceStateChangeListener(DeviceStateMachine::StateCallback callback) {
         return state_machine_.AddStateChangeListener(std::move(callback));
     }
+
+    void AddSttListener(std::function<void(const std::string&)> callback);
     
     /**
      * Request state transition
@@ -134,6 +137,8 @@ private:
 
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
+    std::mutex stt_listeners_mutex_;
+    std::vector<std::function<void(const std::string&)>> stt_listeners_;
     std::unique_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
