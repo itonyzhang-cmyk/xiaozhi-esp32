@@ -30,7 +30,8 @@ void OpenArmIdleController::Task(void* context) {
 void OpenArmIdleController::HandleStateChange(DeviceState old_state, DeviceState new_state) {
 #if CONFIG_OPENARM_WAKE_MOTION
     if (old_state == kDeviceStateIdle && new_state == kDeviceStateConnecting) {
-        if (robot_.Perform(CONFIG_OPENARM_WAKE_ACTION)) {
+        if (robot_.Perform(CONFIG_OPENARM_WAKE_ACTION, false,
+                           OpenArmRobotClient::TriggerSource::kWake)) {
             ESP_LOGI(TAG, "queued wake action %s", CONFIG_OPENARM_WAKE_ACTION);
         } else {
             ESP_LOGW(TAG, "failed to queue wake action %s", CONFIG_OPENARM_WAKE_ACTION);
@@ -76,7 +77,8 @@ void OpenArmIdleController::Loop() {
 
         ++idle_seconds;
         if (!dozing && idle_seconds >= CONFIG_OPENARM_DOZE_SECONDS) {
-            if (robot_.Perform("idle-doze", true)) {
+            if (robot_.Perform("idle-doze", true,
+                               OpenArmRobotClient::TriggerSource::kAutonomousIdle)) {
                 ESP_LOGI(TAG, "queued autonomous doze");
                 dozing = true;
             }
@@ -85,7 +87,8 @@ void OpenArmIdleController::Loop() {
 
         if (!dozing && idle_seconds >= next_motion_at) {
             const size_t index = esp_random() % (sizeof(kIdleActions) / sizeof(kIdleActions[0]));
-            if (robot_.Perform(kIdleActions[index], true)) {
+            if (robot_.Perform(kIdleActions[index], true,
+                               OpenArmRobotClient::TriggerSource::kAutonomousIdle)) {
                 ESP_LOGI(TAG, "queued autonomous action %s", kIdleActions[index]);
             }
             const uint32_t minimum = CONFIG_OPENARM_IDLE_MIN_SECONDS;

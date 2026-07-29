@@ -58,10 +58,10 @@ void OpenArmFastIntentRouter::HandleStt(const std::string& raw_text) {
 
     if (Matches(text, std::array{"停下", "停止", "停止动作", "别动", "stop"})) {
         intent = "stop";
-        queued = robot_.Stop();
+        queued = robot_.Stop(OpenArmRobotClient::TriggerSource::kFastIntent);
     } else if (Matches(text, std::array{"休息", "回正", "回到休息姿态", "rest"})) {
         intent = "rest";
-        queued = robot_.Rest();
+        queued = robot_.Rest(OpenArmRobotClient::TriggerSource::kFastIntent);
     } else if (Matches(text, std::array{"向左看", "看左边", "看看左边", "转头看左边",
                                         "lookleft"})) {
         intent = "look:left";

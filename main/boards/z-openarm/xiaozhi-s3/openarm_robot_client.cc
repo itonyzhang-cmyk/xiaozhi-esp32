@@ -45,6 +45,21 @@ std::string QueueAckJson(bool queued, const char* command, const std::string& ac
     return result;
 }
 
+std::string WithTriggerSource(const std::string& arguments_json, const char* source) {
+    cJSON* root = cJSON_Parse(arguments_json.c_str());
+    if (!cJSON_IsObject(root)) {
+        cJSON_Delete(root);
+        root = cJSON_CreateObject();
+    }
+    cJSON_DeleteItemFromObjectCaseSensitive(root, "trigger_source");
+    cJSON_AddStringToObject(root, "trigger_source", source);
+    char* encoded = cJSON_PrintUnformatted(root);
+    std::string result(encoded == nullptr ? "{}" : encoded);
+    cJSON_free(encoded);
+    cJSON_Delete(root);
+    return result;
+}
+
 std::string ResolveEmbodiedAlias(const std::string& requested) {
     static constexpr std::array<std::pair<const char*, const char*>, 15> kAliases = {{
         {"hand_wave", "wave"},
@@ -171,6 +186,36 @@ OpenArmRobotClient::OpenArmRobotClient() {
 
 OpenArmRobotClient::~OpenArmRobotClient() = default;
 
+const char* OpenArmRobotClient::CommandTypeName(CommandType type) {
+    switch (type) {
+        case CommandType::kPerform:
+            return "perform";
+        case CommandType::kPerformSequence:
+            return "perform_sequence";
+        case CommandType::kStop:
+            return "stop";
+        case CommandType::kRest:
+            return "rest";
+    }
+    return "unknown";
+}
+
+const char* OpenArmRobotClient::TriggerSourceName(TriggerSource source) {
+    switch (source) {
+        case TriggerSource::kCloudMcp:
+            return "cloud_mcp";
+        case TriggerSource::kFastIntent:
+            return "fast_intent";
+        case TriggerSource::kAutonomousIdle:
+            return "autonomous_idle";
+        case TriggerSource::kWake:
+            return "wake";
+        case TriggerSource::kSystem:
+            return "system";
+    }
+    return "unknown";
+}
+
 void OpenArmRobotClient::RegisterMcpTools() {
     auto& mcp = McpServer::GetInstance();
     mcp.AddTool(
@@ -242,7 +287,8 @@ void OpenArmRobotClient::StartCatalogSync() {
     xTaskCreate(CatalogTask, "openarm_catalog", 7168, this, 1, nullptr);
 }
 
-bool OpenArmRobotClient::Perform(const std::string& action_id, bool autonomous) {
+bool OpenArmRobotClient::Perform(const std::string& action_id, bool autonomous,
+                                 TriggerSource source) {
     if (action_id.empty() || action_id.size() >= sizeof(Command{}.action_id)) {
         return false;
     }
@@ -257,7 +303,8 @@ bool OpenArmRobotClient::Perform(const std::string& action_id, bool autonomous) 
         autonomous_active_.store(true);
     }
     const bool queued =
-        Enqueue(CommandType::kPerform, action_id.c_str(), autonomous, interrupt_autonomous);
+        Enqueue(CommandType::kPerform, action_id.c_str(), autonomous, interrupt_autonomous, "",
+                source);
     if (autonomous && !queued) {
         autonomous_active_.store(false);
     }
@@ -274,7 +321,7 @@ bool OpenArmRobotClient::PerformFastIntent(const std::string& action_id,
         last_fast_intent_at_ = now;
     }
     interaction_lease_until_.store(now + pdMS_TO_TICKS(lease_ms));
-    return Perform(action_id);
+    return Perform(action_id, false, TriggerSource::kFastIntent);
 }
 
 bool OpenArmRobotClient::HasInteractionLease() const {
@@ -301,6 +348,7 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
         const std::string semantic_key = "look:" + look_direction;
         if (IsRecentFastIntent(semantic_key)) {
             ESP_LOGI(TAG, "suppressed duplicate cloud action %s", semantic_key.c_str());
+            RecordSuppressedCloudDuplicate();
             return true;
         }
         const std::string preset = "quick-look-" + look_direction;
@@ -312,6 +360,7 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
     const std::string resolved = ResolveEmbodiedAlias(action);
     if ((resolved == "nod" || resolved == "shake_head") && IsRecentFastIntent(resolved)) {
         ESP_LOGI(TAG, "suppressed duplicate cloud action %s", resolved.c_str());
+        RecordSuppressedCloudDuplicate();
         return true;
     }
     bool is_published = false;
@@ -353,7 +402,8 @@ bool OpenArmRobotClient::PerformEmbodied(const std::string& action) {
     return false;
 }
 
-bool OpenArmRobotClient::PerformSequence(const std::string& sequence_json) {
+bool OpenArmRobotClient::PerformSequence(const std::string& sequence_json,
+                                         TriggerSource source) {
     if (sequence_json.empty() || sequence_json.size() >= sizeof(Command{}.payload)) {
         SaveResult(false, "basic action sequence JSON is empty or too large");
         return false;
@@ -388,19 +438,20 @@ bool OpenArmRobotClient::PerformSequence(const std::string& sequence_json) {
     }
 
     autonomous_active_.store(false);
-    return Enqueue(CommandType::kPerformSequence, "", false, false, sequence_json.c_str());
+    return Enqueue(CommandType::kPerformSequence, "", false, false, sequence_json.c_str(),
+                   source);
 }
 
-bool OpenArmRobotClient::Stop() {
+bool OpenArmRobotClient::Stop(TriggerSource source) {
     autonomous_active_.store(false);
     ClearPendingCommands();
-    return Enqueue(CommandType::kStop);
+    return Enqueue(CommandType::kStop, "", false, false, "", source);
 }
 
-bool OpenArmRobotClient::Rest() {
+bool OpenArmRobotClient::Rest(TriggerSource source) {
     autonomous_active_.store(false);
     ClearPendingCommands();
-    return Enqueue(CommandType::kRest);
+    return Enqueue(CommandType::kRest, "", false, false, "", source);
 }
 
 bool OpenArmRobotClient::InterruptAutonomous() {
@@ -408,7 +459,7 @@ bool OpenArmRobotClient::InterruptAutonomous() {
         return true;
     }
     ClearPendingCommands();
-    return Enqueue(CommandType::kRest);
+    return Enqueue(CommandType::kRest, "", false, false, "", TriggerSource::kSystem);
 }
 
 void OpenArmRobotClient::ClearPendingCommands() {
@@ -418,12 +469,15 @@ void OpenArmRobotClient::ClearPendingCommands() {
 }
 
 bool OpenArmRobotClient::Enqueue(CommandType type, const char* action_id, bool autonomous,
-                                 bool interrupt_autonomous, const char* payload) {
+                                 bool interrupt_autonomous, const char* payload,
+                                 TriggerSource source) {
     if (queue_ == nullptr) {
         return false;
     }
     Command command = {
+        .id = command_id_.fetch_add(1),
         .type = type,
+        .source = source,
         .autonomous = autonomous,
         .interrupt_autonomous = interrupt_autonomous,
         .enqueued_at_us = esp_timer_get_time(),
@@ -432,22 +486,22 @@ bool OpenArmRobotClient::Enqueue(CommandType type, const char* action_id, bool a
     };
     std::strncpy(command.action_id, action_id, sizeof(command.action_id) - 1);
     std::strncpy(command.payload, payload, sizeof(command.payload) - 1);
-    const std::string command_name = type == CommandType::kPerform
-                                         ? "perform"
-                                         : (type == CommandType::kPerformSequence
-                                                ? "perform_sequence"
-                                                : (type == CommandType::kStop ? "stop" : "rest"));
+    const std::string command_name = CommandTypeName(type);
     const std::string queued_result =
         command.action_id[0] == '\0'
             ? "queued " + command_name
             : "queued " + command_name + ": " + std::string(command.action_id);
-    SaveResult(true, queued_result);
     if (xQueueSend(queue_, &command, 0) != pdTRUE) {
-        ESP_LOGW(TAG, "command queue full; dropping type=%d", static_cast<int>(type));
+        ESP_LOGW(TAG, "command queue full; dropping id=%lu source=%s type=%s",
+                 static_cast<unsigned long>(command.id), TriggerSourceName(source),
+                 CommandTypeName(type));
         SaveResult(false, "local command queue is full");
         return false;
     }
-    ESP_LOGI(TAG, "%s", queued_result.c_str());
+    RecordQueued(command);
+    ESP_LOGI(TAG, "queued id=%lu source=%s type=%s action=%s",
+             static_cast<unsigned long>(command.id), TriggerSourceName(source),
+             CommandTypeName(type), command.action_id[0] == '\0' ? "-" : command.action_id);
     return true;
 }
 
@@ -458,18 +512,25 @@ void OpenArmRobotClient::WorkerTask(void* context) {
 void OpenArmRobotClient::WorkerLoop() {
     Command command;
     while (xQueueReceive(queue_, &command, portMAX_DELAY) == pdTRUE) {
-        ESP_LOGI(TAG, "dispatch queue_wait_ms=%lld",
+        ESP_LOGI(TAG, "dispatch id=%lu source=%s type=%s action=%s queue_wait_ms=%lld",
+                 static_cast<unsigned long>(command.id), TriggerSourceName(command.source),
+                 CommandTypeName(command.type),
+                 command.action_id[0] == '\0' ? "-" : command.action_id,
                  static_cast<long long>((esp_timer_get_time() - command.enqueued_at_us) / 1000));
+        const char* trigger_source = TriggerSourceName(command.source);
         bool ok = false;
         if (command.type == CommandType::kPerform) {
             if (command.interrupt_autonomous) {
-                CallTool("cancel_motion", "{}");
+                CallTool("cancel_motion", WithTriggerSource("{}", trigger_source));
                 vTaskDelay(pdMS_TO_TICKS(200));
             }
             constexpr int kInterruptSubmitAttempts = 5;
             const int attempts = command.interrupt_autonomous ? kInterruptSubmitAttempts : 1;
             for (int attempt = 1; attempt <= attempts; ++attempt) {
-                ok = CallTool("execute_action", "{\"id\":" + JsonString(command.action_id) + "}");
+                const std::string arguments =
+                    "{\"id\":" + JsonString(command.action_id) + "}";
+                ok = CallTool("execute_action",
+                              WithTriggerSource(arguments, trigger_source));
                 if (ok || attempt == attempts) {
                     break;
                 }
@@ -481,13 +542,19 @@ void OpenArmRobotClient::WorkerLoop() {
                 autonomous_active_.store(false);
             }
         } else if (command.type == CommandType::kPerformSequence) {
-            ok = CallTool("execute_basic_sequence", command.payload);
+            ok = CallTool("execute_basic_sequence",
+                          WithTriggerSource(command.payload, trigger_source));
         } else if (command.type == CommandType::kStop) {
-            ok = CallTool("cancel_motion", "{}");
+            ok = CallTool("cancel_motion", WithTriggerSource("{}", trigger_source));
         } else if (command.type == CommandType::kRest) {
-            ok = CallTool("stop_and_rest", "{\"time_ms\":1400}");
+            ok = CallTool("stop_and_rest",
+                          WithTriggerSource("{\"time_ms\":1400}", trigger_source));
         }
-        ESP_LOGI(TAG, "command type=%d result=%s", static_cast<int>(command.type),
+        RecordSubmitted(command, ok);
+        ESP_LOGI(TAG, "submitted id=%lu source=%s type=%s action=%s result=%s",
+                 static_cast<unsigned long>(command.id), trigger_source,
+                 CommandTypeName(command.type),
+                 command.action_id[0] == '\0' ? "-" : command.action_id,
                  ok ? "ok" : "failed");
     }
 }
@@ -637,12 +704,60 @@ std::string OpenArmRobotClient::CachedBasicCatalog() {
 }
 
 std::string OpenArmRobotClient::StatusJson() {
+    std::string fast_intent;
+    uint32_t fast_intent_at = 0;
+    {
+        std::lock_guard<std::mutex> lock(fast_intent_mutex_);
+        fast_intent = last_fast_intent_;
+        fast_intent_at = last_fast_intent_at_;
+    }
     std::lock_guard<std::mutex> lock(status_mutex_);
     cJSON* root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", last_ok_);
     cJSON_AddBoolToObject(root, "autonomous_active", autonomous_active_.load());
     cJSON_AddNumberToObject(root, "queued", queue_ == nullptr ? 0 : uxQueueMessagesWaiting(queue_));
     cJSON_AddStringToObject(root, "last_result", last_result_.c_str());
+
+    cJSON* counts = cJSON_AddObjectToObject(root, "trigger_counts");
+    cJSON_AddNumberToObject(counts, "cloud_mcp",
+                            trigger_counts_[static_cast<size_t>(TriggerSource::kCloudMcp)]);
+    cJSON_AddNumberToObject(counts, "fast_intent",
+                            trigger_counts_[static_cast<size_t>(TriggerSource::kFastIntent)]);
+    cJSON_AddNumberToObject(
+        counts, "autonomous_idle",
+        trigger_counts_[static_cast<size_t>(TriggerSource::kAutonomousIdle)]);
+    cJSON_AddNumberToObject(counts, "wake",
+                            trigger_counts_[static_cast<size_t>(TriggerSource::kWake)]);
+    cJSON_AddNumberToObject(counts, "system",
+                            trigger_counts_[static_cast<size_t>(TriggerSource::kSystem)]);
+    cJSON_AddNumberToObject(counts, "cloud_duplicates_suppressed",
+                            cloud_duplicates_suppressed_);
+
+    cJSON* last_fast = cJSON_AddObjectToObject(root, "last_fast_intent");
+    cJSON_AddStringToObject(last_fast, "intent",
+                            fast_intent.empty() ? "none" : fast_intent.c_str());
+    cJSON_AddNumberToObject(last_fast, "uptime_ms",
+                            fast_intent_at * portTICK_PERIOD_MS);
+
+    cJSON* last_queued = cJSON_AddObjectToObject(root, "last_queued_command");
+    cJSON_AddNumberToObject(last_queued, "id", last_queued_id_);
+    cJSON_AddStringToObject(last_queued, "trigger_source", last_queued_source_.c_str());
+    cJSON_AddStringToObject(last_queued, "command", last_queued_command_.c_str());
+    cJSON_AddStringToObject(last_queued, "action",
+                            last_queued_action_.empty() ? "-" : last_queued_action_.c_str());
+    cJSON_AddNumberToObject(last_queued, "uptime_ms", last_queued_uptime_ms_);
+
+    cJSON* last_submitted = cJSON_AddObjectToObject(root, "last_submitted_command");
+    cJSON_AddNumberToObject(last_submitted, "id", last_submitted_id_);
+    cJSON_AddStringToObject(last_submitted, "trigger_source",
+                            last_submitted_source_.c_str());
+    cJSON_AddStringToObject(last_submitted, "command", last_submitted_command_.c_str());
+    cJSON_AddStringToObject(
+        last_submitted, "action",
+        last_submitted_action_.empty() ? "-" : last_submitted_action_.c_str());
+    cJSON_AddBoolToObject(last_submitted, "ok", last_submitted_ok_);
+    cJSON_AddNumberToObject(last_submitted, "uptime_ms", last_submitted_uptime_ms_);
+
     char* encoded = cJSON_PrintUnformatted(root);
     std::string result(encoded == nullptr ? "{}" : encoded);
     cJSON_free(encoded);
@@ -654,4 +769,35 @@ void OpenArmRobotClient::SaveResult(bool ok, const std::string& result) {
     std::lock_guard<std::mutex> lock(status_mutex_);
     last_ok_ = ok;
     last_result_ = result;
+}
+
+void OpenArmRobotClient::RecordQueued(const Command& command) {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    const size_t source_index = static_cast<size_t>(command.source);
+    if (source_index < sizeof(trigger_counts_) / sizeof(trigger_counts_[0])) {
+        ++trigger_counts_[source_index];
+    }
+    last_ok_ = true;
+    last_result_ = "queued " + std::string(CommandTypeName(command.type)) +
+                   (command.action_id[0] == '\0' ? "" : ": " + std::string(command.action_id));
+    last_queued_id_ = command.id;
+    last_queued_source_ = TriggerSourceName(command.source);
+    last_queued_command_ = CommandTypeName(command.type);
+    last_queued_action_ = command.action_id;
+    last_queued_uptime_ms_ = command.enqueued_at_us / 1000;
+}
+
+void OpenArmRobotClient::RecordSubmitted(const Command& command, bool ok) {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    last_submitted_id_ = command.id;
+    last_submitted_source_ = TriggerSourceName(command.source);
+    last_submitted_command_ = CommandTypeName(command.type);
+    last_submitted_action_ = command.action_id;
+    last_submitted_ok_ = ok;
+    last_submitted_uptime_ms_ = esp_timer_get_time() / 1000;
+}
+
+void OpenArmRobotClient::RecordSuppressedCloudDuplicate() {
+    std::lock_guard<std::mutex> lock(status_mutex_);
+    ++cloud_duplicates_suppressed_;
 }
